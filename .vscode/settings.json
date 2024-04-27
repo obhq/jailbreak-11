@@ -1,5 +1,10 @@
 {
+  "[rust]": {
+    "editor.formatOnSave": true
+  },
   "files.insertFinalNewline": true,
   "files.trimFinalNewlines": true,
-  "files.trimTrailingWhitespace": true
+  "files.trimTrailingWhitespace": true,
+  "rust-analyzer.imports.granularity.group": "module",
+  "rust-analyzer.imports.group.enable": false
 }

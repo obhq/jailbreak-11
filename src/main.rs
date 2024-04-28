@@ -1,9 +1,9 @@
 use clap::{command, value_parser, Arg};
-use libc::{bind, sockaddr_ll, socket, AF_PACKET, ETH_P_PPP_DISC, SOCK_RAW};
+use libc::{sockaddr, sockaddr_ll, socket, AF_PACKET, ETH_P_PPP_DISC, SOCK_DGRAM};
 use std::ffi::c_int;
 use std::io::Error;
 use std::mem::{size_of_val, zeroed};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -19,7 +19,7 @@ fn main() -> ExitCode {
         .get_matches();
 
     // Create a socket for PPPoE discovery.
-    let disc = unsafe { socket(AF_PACKET, SOCK_RAW, 0) };
+    let disc = unsafe { socket(AF_PACKET, SOCK_DGRAM, 0) };
 
     if disc < 0 {
         eprintln!(
@@ -38,20 +38,22 @@ fn main() -> ExitCode {
     addr.sll_protocol = ETH_P_PPP_DISC.to_be() as _;
     addr.sll_ifindex = *args.get_one("interface").unwrap();
 
-    if unsafe {
-        bind(
-            disc.as_raw_fd(),
-            &addr as *const sockaddr_ll as _,
-            size_of_val(&addr).try_into().unwrap(),
-        ) < 0
-    } {
-        eprintln!(
-            "Failed to bind PPPoE discovery socket: {}.",
-            Error::last_os_error()
-        );
-
+    if let Err(e) = bind_ll(disc.as_fd(), &addr) {
+        eprintln!("Failed to bind PPPoE discovery socket: {e}.",);
         return ExitCode::FAILURE;
     }
 
     ExitCode::SUCCESS
+}
+
+fn bind_ll(fd: BorrowedFd, addr: &sockaddr_ll) -> Result<(), Error> {
+    let fd = fd.as_raw_fd();
+    let len = size_of_val(addr).try_into().unwrap();
+    let addr = addr as *const sockaddr_ll as *const sockaddr;
+
+    if unsafe { libc::bind(fd, addr, len) < 0 } {
+        Err(Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }

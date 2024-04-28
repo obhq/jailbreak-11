@@ -47,7 +47,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    loop {
+    'top: loop {
         // Wait for PPPoE discovery packet.
         let mut buf = [0; 1500];
         let (len, addr) = match recv_ll(disc.as_fd(), &mut buf) {
@@ -75,27 +75,39 @@ fn main() -> ExitCode {
         }
 
         // Check Service-Name tag.
-        let mut iter = padi.tags.iter().filter(|(t, _)| *t == 0x0101);
-        let sn = match iter.next() {
-            Some((_, v)) => match std::str::from_utf8(v) {
-                Ok(v) => v,
-                Err(_) => {
-                    eprintln!("Invalid Service-Name tag on PADI packet from the PS4!");
-                    continue;
+        let mut sn = None; // Service-Name
+        let mut hu = None; // Host-Uniq
+
+        for &(t, v) in &padi.tags {
+            match t {
+                0x0101 => {
+                    if sn.is_some() {
+                        eprintln!("Multiple Service-Name tags on PADI packet from the PS4!");
+                        continue 'top;
+                    }
+
+                    match std::str::from_utf8(v) {
+                        Ok(v) => sn = Some(v),
+                        Err(_) => {
+                            eprintln!("Invalid Service-Name tag on PADI packet from the PS4!");
+                            continue 'top;
+                        }
+                    }
                 }
-            },
+                0x0103 => hu = Some(v),
+                _ => {}
+            }
+        }
+
+        let sn = match sn {
+            Some(v) => v,
             None => {
                 eprintln!("No Service-Name tag on PADI packet from the PS4!");
                 continue;
             }
         };
 
-        if iter.next().is_some() {
-            eprintln!("Multiple Service-Name tags on PADI packet from the PS4!");
-            continue;
-        }
-
-        println!("PADI: Service-Name = '{sn}'");
+        println!("PADI: Service-Name = '{sn}', Host-Uniq = {hu:?}");
     }
 }
 

@@ -39,7 +39,7 @@ fn main() -> ExitCode {
     let mut addr: sockaddr_ll = unsafe { zeroed() };
 
     addr.sll_family = AF_PACKET as _;
-    addr.sll_protocol = ETH_P_PPP_DISC.to_be() as _;
+    addr.sll_protocol = (ETH_P_PPP_DISC as u16).to_be();
     addr.sll_ifindex = *args.get_one("interface").unwrap();
 
     if let Err(e) = bind_ll(disc.as_fd(), &addr) {

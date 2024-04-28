@@ -4,18 +4,18 @@ This is an experimental jailbreak for PS4 11.00 or lower using TheFloW disclosed
 
 ## System requirements
 
-- Computer with one ethernet port available
+- Computer with one Ethernet port available
 - Ethernet cable
 - Linux
-  - A VM running Linux may not work.
+  - A VM running Linux may not work
 
 ## Setup
 
-You need to connect the PS4 and the computer with an ethernet cable **without** any ethernet switch in the middle.
+You need to connect the PS4 and the computer with an Ethernet cable **without** any Ethernet switch in the middle.
 
 ## Running
 
-Run the following command on the computer that connect with the PS4 to find the index of the ethernet port connected with the PS4:
+Run the following command on the computer that connected with the PS4 to find the index of connected port:
 
 ```sh
 ip link
@@ -30,13 +30,13 @@ It will output something like:
     link/ether ??:??:??:??:??:?? brd ff:ff:ff:ff:ff:ff
 ```
 
-My computer has only one ethernet so `2` is the index of the ethernet port for me. Once figure out run the following command:
+My computer has only one Ethernet so `2` is an obvious index for me. Once figure out run the following command:
 
 ```sh
 sudo ./jailbreak-11 INDEX
 ```
 
-Replace `INDEX` with the ethernet index then open the PS4 and go to `Settings > Network > Set Up Internet Connection > Use a LAN Cable > Custom > PPPoE`. Enter a random `PPPoE User ID` and `PPPoE Password`.
+Replace `INDEX` with the Ethernet index then open the PS4 and go to `Settings > Network > Set Up Internet Connection > Use a LAN Cable > Custom > PPPoE`. Enter a random `PPPoE User ID` and `PPPoE Password`.
 
 ## License
 

@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.5.4", features = ["cargo"] }
 libc = "0.2.153"
+pretty-hex = "0.4.1"

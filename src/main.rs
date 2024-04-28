@@ -59,6 +59,43 @@ fn main() -> ExitCode {
         };
 
         dump_received(&addr, &buf[..len]);
+
+        // Check if PPPoE Active Discovery Initiation (PADI) packet.
+        let padi = match Payload::deserialize(&buf[..len]) {
+            Some(v) if v.code == 0x09 => v,
+            _ => {
+                eprintln!("Unexpected packet from the PS4!");
+                continue;
+            }
+        };
+
+        if padi.session_id != 0x0000 {
+            eprintln!("Unexpected PPPoE SESSION_ID from the PS4!");
+            continue;
+        }
+
+        // Check Service-Name tag.
+        let mut iter = padi.tags.iter().filter(|(t, _)| *t == 0x0101);
+        let sn = match iter.next() {
+            Some((_, v)) => match std::str::from_utf8(v) {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("Invalid Service-Name tag on PADI packet from the PS4!");
+                    continue;
+                }
+            },
+            None => {
+                eprintln!("No Service-Name tag on PADI packet from the PS4!");
+                continue;
+            }
+        };
+
+        if iter.next().is_some() {
+            eprintln!("Multiple Service-Name tags on PADI packet from the PS4!");
+            continue;
+        }
+
+        println!("PADI: Service-Name = '{sn}'");
     }
 }
 
@@ -143,5 +180,57 @@ impl Display for PacketType {
         match self {
             Self::Broadcast => f.write_str("broadcast"),
         }
+    }
+}
+
+/// Ethernet payload for PPPoE packet.
+struct Payload<'a> {
+    code: u8,
+    session_id: u16,
+    tags: Vec<(u16, &'a [u8])>,
+}
+
+impl<'a> Payload<'a> {
+    fn deserialize(data: &'a [u8]) -> Option<Self> {
+        // Check minimum Ethernet payload length.
+        if data.len() < 6 {
+            return None;
+        }
+
+        // Check version and type.
+        let ver = data[0] & 0xf;
+        let ty = data[0] >> 4;
+
+        if ver != 1 || ty != 1 {
+            return None;
+        }
+
+        // Read CODE, SESSION_ID, LENGTH and payload.
+        let code = data[1];
+        let session_id = u16::from_be_bytes(data[2..4].try_into().unwrap());
+        let length: usize = u16::from_be_bytes(data[4..6].try_into().unwrap()).into();
+        let mut payload = data[6..].get(..length)?;
+
+        // Read tags.
+        let mut tags = Vec::new();
+
+        while !payload.is_empty() {
+            if payload.len() < 4 {
+                return None;
+            }
+
+            let ty = u16::from_be_bytes(payload[..2].try_into().unwrap());
+            let length: usize = u16::from_be_bytes(payload[2..4].try_into().unwrap()).into();
+            let value = payload[4..].get(..length)?;
+
+            tags.push((ty, value));
+            payload = &payload[(4 + length)..];
+        }
+
+        Some(Self {
+            code,
+            session_id,
+            tags,
+        })
     }
 }

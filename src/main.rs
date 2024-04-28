@@ -1,14 +1,19 @@
+use crate::addr::AddrBuilder;
 use clap::{command, value_parser, Arg};
 use libc::{
-    recvfrom, sockaddr, sockaddr_ll, socket, socklen_t, AF_PACKET, ETH_P_PPP_DISC, SOCK_DGRAM,
+    recvfrom, sendto, sockaddr, sockaddr_ll, socket, socklen_t, AF_PACKET, ETH_P_PPP_DISC,
+    SOCK_DGRAM,
 };
 use pretty_hex::{HexConfig, PrettyHex};
+use std::borrow::Cow;
 use std::ffi::c_int;
 use std::fmt::{Display, Formatter};
-use std::io::Error;
+use std::io::{Error, Write};
 use std::mem::{size_of_val, zeroed};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::process::ExitCode;
+
+mod addr;
 
 fn main() -> ExitCode {
     // Parse arguments.
@@ -36,11 +41,8 @@ fn main() -> ExitCode {
 
     // Bind socket to target interface.
     let disc = unsafe { OwnedFd::from_raw_fd(disc) };
-    let mut addr: sockaddr_ll = unsafe { zeroed() };
-
-    addr.sll_family = AF_PACKET as _;
-    addr.sll_protocol = (ETH_P_PPP_DISC as u16).to_be();
-    addr.sll_ifindex = *args.get_one("interface").unwrap();
+    let ab = AddrBuilder::new(*args.get_one("interface").unwrap());
+    let addr = ab.build(ETH_P_PPP_DISC as _, None);
 
     if let Err(e) = bind_ll(disc.as_fd(), &addr) {
         eprintln!("Failed to bind PPPoE discovery socket: {e}.",);
@@ -78,7 +80,7 @@ fn main() -> ExitCode {
         let mut sn = None; // Service-Name
         let mut hu = None; // Host-Uniq
 
-        for &(t, v) in &padi.tags {
+        for (t, v) in &padi.tags {
             match t {
                 0x0101 => {
                     if sn.is_some() {
@@ -86,7 +88,7 @@ fn main() -> ExitCode {
                         continue 'top;
                     }
 
-                    match std::str::from_utf8(v) {
+                    match std::str::from_utf8(v.as_ref()) {
                         Ok(v) => sn = Some(v),
                         Err(_) => {
                             eprintln!("Invalid Service-Name tag on PADI packet from the PS4!");
@@ -94,7 +96,7 @@ fn main() -> ExitCode {
                         }
                     }
                 }
-                0x0103 => hu = Some(v),
+                0x0103 => hu = Some(v.as_ref()),
                 _ => {}
             }
         }
@@ -108,6 +110,30 @@ fn main() -> ExitCode {
         };
 
         println!("PADI: Service-Name = '{sn}', Host-Uniq = {hu:?}");
+
+        // Send PPPoE Active Discovery Offer (PADO) packet.
+        let addr = &addr.sll_addr[..addr.sll_halen.into()];
+        let mut pado = Payload {
+            code: 0x07,
+            session_id: 0x0000,
+            tags: vec![
+                (0x0102, Cow::Borrowed("OBHQ Jailbreak 11.00".as_bytes())),
+                (0x0101, Cow::Borrowed(sn.as_bytes())),
+            ],
+        };
+
+        if let Some(hu) = hu {
+            pado.tags.push((0x0103, Cow::Borrowed(hu)));
+        }
+
+        if let Err(e) = send_ll(
+            disc.as_fd(),
+            ab.build(ETH_P_PPP_DISC as _, Some(addr)),
+            &pado,
+        ) {
+            eprintln!("Failed to send PADO packet: {e}.");
+            continue;
+        }
     }
 }
 
@@ -146,20 +172,45 @@ fn recv_ll(fd: BorrowedFd, buf: &mut [u8; 1500]) -> Result<(usize, sockaddr_ll),
     Ok((received.try_into().unwrap(), addr))
 }
 
+fn send_ll(fd: BorrowedFd, addr: sockaddr_ll, payload: &Payload) -> Result<(), Error> {
+    // Send.
+    let buf = payload.serialize();
+    let sent = unsafe {
+        sendto(
+            fd.as_raw_fd(),
+            buf.as_ptr().cast(),
+            buf.len(),
+            0,
+            &addr as *const sockaddr_ll as _,
+            size_of_val(&addr).try_into().unwrap(),
+        )
+    };
+
+    if sent < 0 {
+        return Err(Error::last_os_error());
+    }
+
+    assert_eq!(sent, buf.len().try_into().unwrap());
+
+    // Print header.
+    print!("S: ");
+    dump_addr(&addr);
+    println!(" (Length = {})", sent);
+
+    // Print sent data.
+    let mut conf = HexConfig::default();
+
+    conf.title = false;
+
+    println!("{:?}", buf.hex_conf(conf));
+
+    Ok(())
+}
+
 fn dump_received(addr: &sockaddr_ll, data: &[u8]) {
     // Print header.
     print!("R: ");
-
-    for i in 0..addr.sll_halen {
-        let i: usize = i.into();
-
-        if i != 0 {
-            print!(":");
-        }
-
-        print!("{:x}", addr.sll_addr[i]);
-    }
-
+    dump_addr(addr);
     println!(
         " (Type = {}, Length = {})",
         PacketType::new(addr.sll_pkttype),
@@ -172,6 +223,18 @@ fn dump_received(addr: &sockaddr_ll, data: &[u8]) {
     conf.title = false;
 
     println!("{:?}", data.hex_conf(conf));
+}
+
+fn dump_addr(addr: &sockaddr_ll) {
+    for i in 0..addr.sll_halen {
+        let i: usize = i.into();
+
+        if i != 0 {
+            print!(":");
+        }
+
+        print!("{:x}", addr.sll_addr[i]);
+    }
 }
 
 enum PacketType {
@@ -199,7 +262,7 @@ impl Display for PacketType {
 struct Payload<'a> {
     code: u8,
     session_id: u16,
-    tags: Vec<(u16, &'a [u8])>,
+    tags: Vec<(u16, Cow<'a, [u8]>)>,
 }
 
 impl<'a> Payload<'a> {
@@ -235,7 +298,7 @@ impl<'a> Payload<'a> {
             let length: usize = u16::from_be_bytes(payload[2..4].try_into().unwrap()).into();
             let value = payload[4..].get(..length)?;
 
-            tags.push((ty, value));
+            tags.push((ty, Cow::Borrowed(value)));
             payload = &payload[(4 + length)..];
         }
 
@@ -244,5 +307,36 @@ impl<'a> Payload<'a> {
             session_id,
             tags,
         })
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+
+        // Write VER, TYPE and CODE.
+        buf.push(0x11);
+        buf.push(self.code);
+
+        // Write SESSION_ID and a placeholder for LENGTH.
+        buf.write_all(&self.session_id.to_be_bytes()).unwrap();
+        buf.write_all(&[0; 2]).unwrap();
+
+        // Write tags.
+        let mut len = 0usize;
+
+        for (t, v) in &self.tags {
+            let l: u16 = v.len().try_into().unwrap();
+
+            buf.write_all(&t.to_be_bytes()).unwrap();
+            buf.write_all(&l.to_be_bytes()).unwrap();
+            buf.write_all(v).unwrap();
+
+            len += 4 + Into::<usize>::into(l);
+        }
+
+        assert!(len <= (1500 - 6));
+
+        // Write LENGTH.
+        buf[4..6].copy_from_slice(&(len as u16).to_be_bytes());
+        buf
     }
 }

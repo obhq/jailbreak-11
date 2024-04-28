@@ -1,15 +1,21 @@
 use crate::addr::AddrBuilder;
-use crate::disc::DiscoveryServer;
-use crate::sock::PacketSocket;
+use crate::discovery::DiscoveryServer;
+use crate::session::SessionServer;
+use crate::socket::PacketSocket;
 use clap::{command, value_parser, Arg, ArgMatches};
-use libc::ETH_P_PPP_DISC;
+use erdp::ErrorDisplay;
+use libc::{ETH_P_PPP_DISC, ETH_P_PPP_SES};
 use std::ffi::c_int;
 use std::process::ExitCode;
 use std::sync::Arc;
+use tokio::select;
+use tokio_util::sync::CancellationToken;
 
 mod addr;
-mod disc;
-mod sock;
+mod discovery;
+mod payload;
+mod session;
+mod socket;
 
 fn main() -> ExitCode {
     // Parse arguments.
@@ -33,30 +39,49 @@ fn main() -> ExitCode {
 }
 
 async fn run(args: ArgMatches) -> ExitCode {
+    let ab = Arc::new(AddrBuilder::new(*args.get_one("interface").unwrap()));
+
     // Create a socket for PPPoE discovery.
     let disc = match PacketSocket::new() {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("Failed to create PPPoE discovery socket: {e}.");
+            eprintln!("Failed to create PPPoE discovery socket: {}.", e.display());
             return ExitCode::FAILURE;
         }
     };
 
-    // Bind socket to target interface.
-    let ab = Arc::new(AddrBuilder::new(*args.get_one("interface").unwrap()));
-    let addr = ab.build(ETH_P_PPP_DISC as _, None);
-
-    if let Err(e) = disc.bind(&addr) {
-        eprintln!("Failed to bind PPPoE discovery socket: {e}.");
+    if let Err(e) = disc.bind(ab.build(ETH_P_PPP_DISC as _, None)) {
+        eprintln!("Failed to bind PPPoE discovery socket: {}.", e.display());
         return ExitCode::FAILURE;
     }
 
-    // Run discovery server.
-    let disc = DiscoveryServer::new(disc, ab.clone());
+    // Create a socket for PPPoE session.
+    let sess = match PacketSocket::new() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Failed to create PPPoE session socket: {}.", e.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
-    if disc.run().await {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+    if let Err(e) = sess.bind(ab.build(ETH_P_PPP_SES as _, None)) {
+        eprintln!("Failed to bind PPPoE session socket: {}.", e.display());
+        return ExitCode::FAILURE;
     }
+
+    // Run servers.
+    let running = CancellationToken::new();
+    let disc = DiscoveryServer::new(disc, ab.clone());
+    let sess = SessionServer::new(sess);
+
+    tokio::spawn(disc.run(running.clone()));
+    tokio::spawn(sess.run(running.clone()));
+
+    // Wait for shutdown.
+    select! {
+        v = tokio::signal::ctrl_c() => v.unwrap(),
+        _ = running.cancelled() => {}
+    }
+
+    ExitCode::SUCCESS
 }

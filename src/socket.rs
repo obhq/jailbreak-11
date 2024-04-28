@@ -34,10 +34,10 @@ impl PacketSocket {
         Ok(Self(AsyncFd::with_interest(s, Interest::READABLE)?))
     }
 
-    pub fn bind(&self, addr: &sockaddr_ll) -> Result<(), Error> {
+    pub fn bind(&self, addr: sockaddr_ll) -> Result<(), Error> {
         let fd = self.0.as_raw_fd();
-        let len = size_of_val(addr).try_into().unwrap();
-        let addr = addr as *const sockaddr_ll as *const sockaddr;
+        let len = size_of_val(&addr).try_into().unwrap();
+        let addr = &addr as *const sockaddr_ll as *const sockaddr;
 
         if unsafe { libc::bind(fd, addr, len) < 0 } {
             Err(Error::last_os_error())

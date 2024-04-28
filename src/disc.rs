@@ -35,42 +35,45 @@ impl DiscoveryServer {
                 }
             };
 
-            // Check packet type.
-            let data = &buf[..len];
+            // Get source address.
             let ty = addr.sll_pkttype;
             let addr = match addr.sll_halen {
                 6 => MacAddr6::from(TryInto::<[u8; 6]>::try_into(&addr.sll_addr[..6]).unwrap()),
                 _ => unreachable!(),
             };
 
+            // Deserialize the payload.
+            let data = match Payload::deserialize(&buf[..len]) {
+                Some(v) => v,
+                None => {
+                    eprintln!("Unexpected PPPoE discovery packet from {addr}.");
+                    continue;
+                }
+            };
+
+            // Process the payload.
             match ty {
-                0 => self.parse_local(addr, data),
-                1 => self.parse_broadcast(addr, data),
+                0 => match data.code {
+                    0x19 => self.parse_padr(addr, data),
+                    _ => eprintln!(
+                        "Unexpected PPPoE discovery unicast packet {} from {}.",
+                        data.code, addr
+                    ),
+                },
+                1 => match data.code {
+                    0x09 => self.parse_padi(addr, data),
+                    _ => eprintln!(
+                        "Unexpected PPPoE discovery broadcast packet {} from {}.",
+                        data.code, addr
+                    ),
+                },
                 _ => eprintln!("Unexpected sll_pkttype from {addr}."),
             }
         }
     }
 
-    fn parse_broadcast(&self, addr: MacAddr6, data: &[u8]) {
-        // Check if PPPoE Active Discovery Initiation (PADI) packet.
-        let padi = match Payload::deserialize(data) {
-            Some(v) => v,
-            None => {
-                eprintln!("Unexpected PPPoE discovery packet from {addr}.");
-                return;
-            }
-        };
-
-        if padi.code != 0x09 {
-            eprintln!(
-                "Unexpected PPPoE discovery packet {} from {}.",
-                padi.code, addr
-            );
-
-            return;
-        }
-
-        if padi.session_id != 0x0000 {
+    fn parse_padi(&self, addr: MacAddr6, data: Payload) {
+        if data.session_id != 0x0000 {
             eprintln!("Unexpected PPPoE SESSION_ID from {addr}.");
             return;
         }
@@ -79,7 +82,7 @@ impl DiscoveryServer {
         let mut sn = None; // Service-Name
         let mut hu = None; // Host-Uniq
 
-        for (t, v) in &padi.tags {
+        for (t, v) in &data.tags {
             match t {
                 0x0101 => {
                     if sn.is_some() {
@@ -133,8 +136,66 @@ impl DiscoveryServer {
         }
     }
 
-    fn parse_local(&self, addr: MacAddr6, data: &[u8]) {
-        todo!()
+    fn parse_padr(&self, addr: MacAddr6, data: Payload) {
+        if data.session_id != 0x0000 {
+            eprintln!("Unexpected PPPoE SESSION_ID from {addr}.");
+            return;
+        }
+
+        // Process tags.
+        let mut sn = None; // Service-Name
+        let mut hu = None; // Host-Uniq
+
+        for (t, v) in &data.tags {
+            match t {
+                0x0101 => {
+                    if sn.is_some() {
+                        eprintln!("Multiple Service-Name tags on PADR packet from {addr}.");
+                        return;
+                    }
+
+                    match std::str::from_utf8(v.as_ref()) {
+                        Ok(v) => sn = Some(v),
+                        Err(_) => {
+                            eprintln!("Invalid Service-Name tag on PADR packet from {addr}.");
+                            return;
+                        }
+                    }
+                }
+                0x0103 => hu = Some(v.as_ref()),
+                _ => {}
+            }
+        }
+
+        // Check Service-Name tag.
+        let sn = match sn {
+            Some(v) => v,
+            None => {
+                eprintln!("No Service-Name tag on PADR packet from {addr}.");
+                return;
+            }
+        };
+
+        println!("PADR: Service-Name = '{sn}', Host-Uniq = {hu:?}");
+
+        // Send PPPoE Active Discovery Session-confirmation (PADS) packet.
+        let session_id = 0;
+        let mut pads = Payload {
+            code: 0x65,
+            session_id,
+            tags: vec![(0x0101, Cow::Borrowed(sn.as_bytes()))],
+        };
+
+        if let Some(hu) = hu {
+            pads.tags.push((0x0103, Cow::Borrowed(hu)));
+        }
+
+        if let Err(e) = self.sock.send(
+            self.ab.build(ETH_P_PPP_DISC as _, Some(addr)),
+            pads.serialize(),
+        ) {
+            eprintln!("Failed to send PADS packet to {}: {}.", addr, e.display());
+        }
     }
 }
 

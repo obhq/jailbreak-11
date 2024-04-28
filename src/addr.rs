@@ -1,8 +1,9 @@
 use libc::{sockaddr_ll, AF_PACKET};
+use macaddr::MacAddr6;
 use std::ffi::c_int;
 use std::mem::zeroed;
 
-/// Struct to build an [`Addr`].
+/// Struct to build a [`sockaddr_ll`].
 pub struct AddrBuilder {
     interface: c_int,
 }
@@ -12,7 +13,7 @@ impl AddrBuilder {
         Self { interface }
     }
 
-    pub fn build(&self, proto: u16, addr: Option<&[u8]>) -> sockaddr_ll {
+    pub fn build(&self, proto: u16, addr: Option<MacAddr6>) -> sockaddr_ll {
         let mut v: sockaddr_ll = unsafe { zeroed() };
 
         v.sll_family = AF_PACKET as _;
@@ -20,6 +21,8 @@ impl AddrBuilder {
         v.sll_ifindex = self.interface;
 
         if let Some(addr) = addr {
+            let addr = addr.as_bytes();
+
             v.sll_addr[..addr.len()].copy_from_slice(addr);
             v.sll_halen = addr.len().try_into().unwrap();
         }

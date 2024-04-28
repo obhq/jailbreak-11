@@ -1,7 +1,7 @@
 use crate::addr::AddrBuilder;
 use crate::disc::DiscoveryServer;
 use crate::sock::PacketSocket;
-use clap::{command, value_parser, Arg};
+use clap::{command, value_parser, Arg, ArgMatches};
 use libc::ETH_P_PPP_DISC;
 use std::ffi::c_int;
 use std::process::ExitCode;
@@ -23,6 +23,16 @@ fn main() -> ExitCode {
         )
         .get_matches();
 
+    // Setup Tokio.
+    let tokio = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    tokio.block_on(run(args))
+}
+
+async fn run(args: ArgMatches) -> ExitCode {
     // Create a socket for PPPoE discovery.
     let disc = match PacketSocket::new() {
         Ok(v) => v,
@@ -44,7 +54,7 @@ fn main() -> ExitCode {
     // Run discovery server.
     let disc = DiscoveryServer::new(disc, ab.clone());
 
-    if disc.run() {
+    if disc.run().await {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

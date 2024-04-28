@@ -1,22 +1,37 @@
-use libc::{recvfrom, sendto, sockaddr, sockaddr_ll, socket, socklen_t, AF_PACKET, SOCK_DGRAM};
+use libc::{
+    fcntl, recvfrom, sendto, sockaddr, sockaddr_ll, socket, socklen_t, AF_PACKET, F_GETFL, F_SETFL,
+    O_NONBLOCK, SOCK_DGRAM,
+};
 use pretty_hex::{hex_write, HexConfig};
 use std::fmt::Write;
 use std::io::Error;
 use std::mem::{size_of_val, zeroed};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use tokio::io::unix::AsyncFd;
+use tokio::io::Interest;
 
 /// Encapsulate an `AF_PACKET` socket.
-pub struct PacketSocket(OwnedFd);
+pub struct PacketSocket(AsyncFd<OwnedFd>);
 
 impl PacketSocket {
     pub fn new() -> Result<Self, Error> {
-        let disc = unsafe { socket(AF_PACKET, SOCK_DGRAM, 0) };
+        // Create socket.
+        let s = unsafe { socket(AF_PACKET, SOCK_DGRAM, 0) };
 
-        if disc < 0 {
-            Err(Error::last_os_error())
-        } else {
-            Ok(Self(unsafe { OwnedFd::from_raw_fd(disc) }))
+        if s < 0 {
+            return Err(Error::last_os_error());
         }
+
+        // Enable non-blocking.
+        let s = unsafe { OwnedFd::from_raw_fd(s) };
+        let f = unsafe { fcntl(s.as_raw_fd(), F_GETFL) };
+
+        if f < 0 || unsafe { fcntl(s.as_raw_fd(), F_SETFL, f | O_NONBLOCK) } < 0 {
+            return Err(Error::last_os_error());
+        }
+
+        // Register with Tokio.
+        Ok(Self(AsyncFd::with_interest(s, Interest::READABLE)?))
     }
 
     pub fn bind(&self, addr: &sockaddr_ll) -> Result<(), Error> {
@@ -31,29 +46,36 @@ impl PacketSocket {
         }
     }
 
-    pub fn recv(&self, buf: &mut [u8]) -> Result<(usize, sockaddr_ll), Error> {
+    pub async fn recv(&self, buf: &mut [u8]) -> Result<(usize, sockaddr_ll), Error> {
         // Receive.
         let mut addr: sockaddr_ll = unsafe { zeroed() };
-        let mut alen: socklen_t = size_of_val(&addr).try_into().unwrap();
-        let received = unsafe {
-            recvfrom(
-                self.0.as_raw_fd(),
-                buf.as_mut_ptr().cast(),
-                buf.len(),
-                0,
-                &mut addr as *mut sockaddr_ll as _,
-                &mut alen,
-            )
+        let received = loop {
+            if let Ok(v) = self.0.readable().await?.try_io(|s| {
+                let mut alen: socklen_t = size_of_val(&addr).try_into().unwrap();
+                let received = unsafe {
+                    recvfrom(
+                        s.as_raw_fd(),
+                        buf.as_mut_ptr().cast(),
+                        buf.len(),
+                        0,
+                        &mut addr as *mut sockaddr_ll as _,
+                        &mut alen,
+                    )
+                };
+
+                if received < 0 {
+                    return Err(Error::last_os_error());
+                }
+
+                assert_eq!(alen, size_of_val(&addr).try_into().unwrap());
+
+                Ok(received as usize)
+            }) {
+                break v?;
+            }
         };
 
-        if received < 0 {
-            return Err(Error::last_os_error());
-        }
-
-        assert_eq!(alen, size_of_val(&addr).try_into().unwrap());
-
         // Print header.
-        let received = received as usize;
         let mut log = String::from("R: ");
 
         Self::write_addr(&mut log, &addr);

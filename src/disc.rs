@@ -18,12 +18,12 @@ impl DiscoveryServer {
         Self { sock, ab }
     }
 
-    pub fn run(&self) -> bool {
+    pub async fn run(&self) -> bool {
         let mut buf = [0; 1500];
 
         loop {
             // Wait for PPPoE discovery packet.
-            let (len, addr) = match self.sock.recv(&mut buf) {
+            let (len, addr) = match self.sock.recv(&mut buf).await {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!(
@@ -44,7 +44,7 @@ impl DiscoveryServer {
             };
 
             match ty {
-                0 => self.parse_local(),
+                0 => self.parse_local(addr, data),
                 1 => self.parse_broadcast(addr, data),
                 _ => eprintln!("Unexpected sll_pkttype from {addr}."),
             }
@@ -130,11 +130,10 @@ impl DiscoveryServer {
             pado.serialize(),
         ) {
             eprintln!("Failed to send PADO packet to {}: {}.", addr, e.display());
-            return;
         }
     }
 
-    fn parse_local(&self) {
+    fn parse_local(&self, addr: MacAddr6, data: &[u8]) {
         todo!()
     }
 }

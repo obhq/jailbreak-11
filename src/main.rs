@@ -122,7 +122,7 @@ fn dump_received(addr: &sockaddr_ll, data: &[u8]) {
 
     conf.title = false;
 
-    println!("{}", data.hex_conf(conf));
+    println!("{:?}", data.hex_conf(conf));
 }
 
 enum PacketType {

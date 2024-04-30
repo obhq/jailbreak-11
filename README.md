@@ -2,6 +2,8 @@
 
 This is an experimental jailbreak for PS4 11.00 or lower using TheFloW disclosed [exploit](https://hackerone.com/reports/2177925). **This jailbreak is under development and does not working yet and may not working at all**.
 
+TheFloW already [released](https://github.com/TheOfficialFloW/PPPwn) a working version by himself so this repository will be a playground for us to learn how thing work.
+
 ## System requirements
 
 - Computer with one Ethernet port available

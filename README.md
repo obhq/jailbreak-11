@@ -40,6 +40,42 @@ sudo ./jailbreak-11 INDEX
 
 Replace `INDEX` with the Ethernet index then open the PS4 and go to `Settings > Network > Set Up Internet Connection > Use a LAN Cable > Custom > PPPoE`. Enter a random `PPPoE User ID` and `PPPoE Password`.
 
+## Building from source
+
+### Prerequisites
+
+- Rust on the latest stable channel
+
+### Install additional Rust target
+
+```sh
+rustup target add x86_64-unknown-none
+```
+
+### Install additional tools
+
+```sh
+cargo install cargo-binutils
+```
+
+```sh
+rustup component add llvm-tools
+```
+
+### Build the payload
+
+```sh
+cargo objcopy -p payload --target x86_64-unknown-none --release -- -O binary payload.bin
+```
+
+### Build the jailbreak
+
+```sh
+cargo build
+```
+
+After this you can follow the instructions on the Running section by changing the `./jailbreak-11` to `./target/debug/jailbreak-11`.
+
 ## License
 
 MIT

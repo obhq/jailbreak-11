@@ -1,6 +1,6 @@
 use crate::addr::AddrBuilder;
 use crate::discovery::DiscoveryServer;
-use crate::session::SessionServer;
+use crate::session::{SessionServer, Sessions};
 use crate::socket::PacketSocket;
 use clap::{command, value_parser, Arg, ArgMatches};
 use erdp::ErrorDisplay;
@@ -40,9 +40,10 @@ fn main() -> ExitCode {
 
 async fn run(args: ArgMatches) -> ExitCode {
     let ab = Arc::new(AddrBuilder::new(*args.get_one("interface").unwrap()));
+    let sessions = Arc::new(Sessions::default());
 
     // Create a socket for PPPoE discovery.
-    let disc = match PacketSocket::new() {
+    let ds = match PacketSocket::new() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Failed to create PPPoE discovery socket: {}.", e.display());
@@ -50,13 +51,13 @@ async fn run(args: ArgMatches) -> ExitCode {
         }
     };
 
-    if let Err(e) = disc.bind(ab.build(ETH_P_PPP_DISC as _, None)) {
+    if let Err(e) = ds.bind(ab.build(ETH_P_PPP_DISC as _, None)) {
         eprintln!("Failed to bind PPPoE discovery socket: {}.", e.display());
         return ExitCode::FAILURE;
     }
 
     // Create a socket for PPPoE session.
-    let sess = match PacketSocket::new() {
+    let ss = match PacketSocket::new() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Failed to create PPPoE session socket: {}.", e.display());
@@ -64,18 +65,18 @@ async fn run(args: ArgMatches) -> ExitCode {
         }
     };
 
-    if let Err(e) = sess.bind(ab.build(ETH_P_PPP_SES as _, None)) {
+    if let Err(e) = ss.bind(ab.build(ETH_P_PPP_SES as _, None)) {
         eprintln!("Failed to bind PPPoE session socket: {}.", e.display());
         return ExitCode::FAILURE;
     }
 
     // Run servers.
     let running = CancellationToken::new();
-    let disc = DiscoveryServer::new(disc, ab.clone());
-    let sess = SessionServer::new(sess);
+    let ds = DiscoveryServer::new(ds, ab.clone(), sessions.clone());
+    let ss = SessionServer::new(ss);
 
-    tokio::spawn(disc.run(running.clone()));
-    tokio::spawn(sess.run(running.clone()));
+    tokio::spawn(ds.run(running.clone()));
+    tokio::spawn(ss.run(running.clone()));
 
     // Wait for shutdown.
     select! {

@@ -1,5 +1,6 @@
 use crate::addr::AddrBuilder;
 use crate::payload::EthernetPayload;
+use crate::session::Sessions;
 use crate::socket::PacketSocket;
 use erdp::ErrorDisplay;
 use libc::ETH_P_PPP_DISC;
@@ -14,11 +15,12 @@ use tokio_util::sync::CancellationToken;
 pub struct DiscoveryServer {
     sock: PacketSocket,
     ab: Arc<AddrBuilder>,
+    sessions: Arc<Sessions>,
 }
 
 impl DiscoveryServer {
-    pub fn new(sock: PacketSocket, ab: Arc<AddrBuilder>) -> Self {
-        Self { sock, ab }
+    pub fn new(sock: PacketSocket, ab: Arc<AddrBuilder>, sessions: Arc<Sessions>) -> Self {
+        Self { sock, ab, sessions }
     }
 
     pub async fn run(self, running: CancellationToken) {
@@ -187,11 +189,16 @@ impl DiscoveryServer {
 
         println!("PADR: Service-Name = '{sn}', Host-Uniq = {hu:?}");
 
+        // Spawn a session.
+        let session = match self.sessions.spawn() {
+            Some(v) => v,
+            None => todo!(),
+        };
+
         // Send PPPoE Active Discovery Session-confirmation (PADS) packet.
-        let session_id = 1;
         let mut pads = Payload::new(
             0x65,
-            session_id,
+            session.id().get(),
             vec![(0x0101, Cow::Borrowed(sn.as_bytes()))],
         );
 
@@ -204,7 +211,11 @@ impl DiscoveryServer {
             pads.serialize(),
         ) {
             eprintln!("Failed to send PADS packet to {}: {}.", addr, e.display());
+            return;
         }
+
+        // Spawn a task to handle the session.
+        tokio::spawn(session.run());
     }
 }
 
